@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-# 目录
 BASE_DIR="/usr/local/3proxy"
 LIB_DIR="$BASE_DIR/lib"
 DATA_DIR="$BASE_DIR/data"
@@ -25,14 +24,21 @@ chmod +x "$BASE_DIR/3proxy"
 echo "=== 创建项目目录结构 ==="
 mkdir -p "$LIB_DIR" "$DATA_DIR"
 
-echo "=== 下载管理脚本 ==="
-curl -sSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/main/pm -o "$PM_BIN"
+echo "=== 下载管理脚本 pm.sh 并安装成 pm ==="
+curl -fsSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/main/pm.sh -o "$PM_BIN"
 chmod +x "$PM_BIN"
 
-for f in firewall.sh proxy.sh status.sh uninstall.sh; do
-    curl -sSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/main/lib/$f -o "$LIB_DIR/$f"
+echo "=== 下载 lib 脚本 ==="
+for f in proxy.sh status.sh firewall.sh uninstall.sh; do
+    curl -fsSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/main/lib/$f -o "$LIB_DIR/$f"
     chmod +x "$LIB_DIR/$f"
 done
+
+echo "=== 修正 pm 内部 lib 路径 ==="
+sed -i "s|source .*lib/proxy.sh|source $LIB_DIR/proxy.sh|" "$PM_BIN"
+sed -i "s|source .*lib/status.sh|source $LIB_DIR/status.sh|" "$PM_BIN"
+sed -i "s|source .*lib/firewall.sh|source $LIB_DIR/firewall.sh|" "$PM_BIN"
+sed -i "s|source .*lib/uninstall.sh|source $LIB_DIR/uninstall.sh|" "$PM_BIN"
 
 echo "=== 配置 systemd 服务 ==="
 cat > "$SERVICE_FILE" <<EOF
@@ -54,4 +60,4 @@ systemctl daemon-reload
 systemctl enable 3proxy
 
 echo "=== 安装完成 ==="
-echo "现在输入 'pm' 就可以打开管理菜单"
+echo "现在直接输入 'pm' 就能打开 3proxy 管理菜单"
