@@ -1583,6 +1583,12 @@ has_nodes() {
   [[ -n "$records" ]]
 }
 
+clear_if_tty() {
+  if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
+    clear
+  fi
+}
+
 show_install_summary() {
   cat <<EOF
 
@@ -1608,6 +1614,7 @@ EOF
 
 main_menu() {
   while true; do
+    clear_if_tty
     printf '\n%s\n' "========================================"
     printf '%s\n' " $APP_NAME"
     printf '%s\n' "========================================"
