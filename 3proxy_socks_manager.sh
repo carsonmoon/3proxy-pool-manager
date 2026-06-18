@@ -1647,10 +1647,9 @@ main_menu() {
         sync_existing_node_configs
         if has_nodes; then
           restart_all_nodes
-        else
-          log "当前没有节点，已跳过重启。"
         fi
         show_install_summary
+        return 0
         ;;
       2)
         batch_create_nodes
