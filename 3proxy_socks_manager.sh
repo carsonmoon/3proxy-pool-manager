@@ -241,6 +241,40 @@ if addr.version != 4:
 PY
 }
 
+ip_is_local() {
+  local ip="$1"
+
+  if ip -o -4 addr show | awk -v ip="$ip" '
+      $4 !~ /^127\./ {
+        split($4, a, "/")
+        if (a[1] == ip) {
+          found = 1
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    '; then
+    return 0
+  fi
+
+  if ip route get "$ip" >/dev/null 2>&1; then
+    ip route get "$ip" 2>/dev/null | awk -v ip="$ip" '
+      {
+        for (i = 1; i <= NF; i++) {
+          if ($i == "local" && $(i + 1) == ip) {
+            found = 1
+          }
+          if ($i == "src" && $(i + 1) == ip) {
+            found = 1
+          }
+        }
+      }
+      END { exit(found ? 0 : 1) }
+    ' && return 0
+  fi
+
+  return 1
+}
+
 discover_local_ipv4s() {
   ip -o -4 addr show | awk '
     $4 !~ /^127\./ {
@@ -774,6 +808,7 @@ write_node_config() {
   local ip="$2"
   local port="$3"
   local username="$4"
+  local password="$5"
   local cfg
   cfg="$(node_cfg_path "$slug")"
 
@@ -908,7 +943,7 @@ create_node() {
 
   append_node_record "$slug" "$ip" "$port" "$username" "$password"
   rebuild_effective_users
-  write_node_config "$slug" "$ip" "$port" "$username"
+  write_node_config "$slug" "$ip" "$port" "$username" "$password"
 
   if ! ensure_firewall_port_open "$port"; then
     warn "端口放行失败，已回滚该节点：$ip:$port"
