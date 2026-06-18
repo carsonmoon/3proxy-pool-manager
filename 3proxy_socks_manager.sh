@@ -920,35 +920,6 @@ list_users() {
   '
 }
 
-select_node_slug() {
-  local records
-  records="$(list_node_records)"
-  if [[ -z "$records" ]]; then
-    die "当前没有可操作的节点。"
-  fi
-
-  local entries=()
-  while IFS=$'\t' read -r slug ip port username password created; do
-    [[ -n "${slug:-}" ]] || continue
-    entries+=("$slug|$ip|$port|$username|$created")
-  done <<<"$records"
-
-  local i
-  printf '\n'
-  for i in "${!entries[@]}"; do
-    IFS='|' read -r slug ip port username created <<<"${entries[$i]}"
-    printf '%2d) %s  [%s:%s]  用户:%s  创建:%s\n' "$((i + 1))" "$slug" "$ip" "$port" "$username" "$created"
-  done
-
-  local idx
-  read -r -p "请选择节点序号：" idx
-  [[ "$idx" =~ ^[0-9]+$ ]] || die "请输入有效序号。"
-  (( idx >= 1 && idx <= ${#entries[@]} )) || die "序号超出范围。"
-
-  IFS='|' read -r slug _ _ _ _ <<<"${entries[$((idx - 1))]}"
-  printf '%s\n' "$slug"
-}
-
 write_node_config() {
   local slug="$1"
   local ip="$2"
@@ -1047,7 +1018,7 @@ prompt_global_credentials() {
   read -r -p "请输入统一密码（留空自动生成）：" password
   if [[ -z "$password" ]]; then
     password="$(random_unique_password)"
-    log "已自动生成统一密码。"
+    log "已自动生成统一密码：$password"
   fi
 
   if [[ "$password" == *:* || "$password" == *[[:space:]]* ]]; then
@@ -1069,6 +1040,8 @@ create_node() {
 
   validate_ipv4 "$ip" || die "IP 地址无效或不是 IPv4：$ip"
   (( port >= 1 && port <= 65535 )) || die "端口超出范围：$port"
+  [[ -n "$username" ]] || die "用户名不能为空。"
+  [[ -n "$password" ]] || die "密码不能为空。"
 
   if ! ip_is_local "$ip"; then
     warn "IP 未绑定到本机网卡：$ip"
@@ -1188,10 +1161,15 @@ batch_create_nodes_from_ips() {
     else
       username="$(random_unique_username)"
       password="$(random_unique_password)"
+      [[ -n "$username" ]] || die "随机用户名生成失败。"
+      [[ -n "$password" ]] || die "随机密码生成失败。"
     fi
 
     if create_node "${ips[$idx]}" "$port" "$username" "$password"; then
       success=$((success + 1))
+      if [[ "$mode" == "2" ]]; then
+        log "随机凭据：${ips[$idx]}:${port} -> ${username}:${password}"
+      fi
     else
       failed=$((failed + 1))
     fi
@@ -1313,19 +1291,31 @@ show_logs() {
     die "当前没有节点。"
   fi
 
-  local slug cfg log_file
-  slug="$(select_node_slug)"
-  cfg="$(node_cfg_path "$slug")"
-  log_file="$LOG_DIR/$slug.log"
-
-  printf '\n配置文件：%s\n日志文件：%s\n\n' "$cfg" "$log_file"
-  systemctl status --no-pager "$(service_name "$slug")" 2>/dev/null || true
+  show_runtime_overview
   printf '\n'
-  journalctl -u "$(service_name "$slug")" -n 100 --no-pager 2>/dev/null || true
-  if [[ -f "$log_file" ]]; then
-    printf '\n文件日志：\n'
-    tail -n 100 "$log_file" 2>/dev/null || true
-  fi
+  print_node_table || true
+
+  printf '\n====== 节点日志 ======\n'
+  while IFS=$'\t' read -r slug ip port username password created; do
+    [[ -n "${slug:-}" ]] || continue
+    local unit log_file status_text
+    unit="$(service_name "$slug")"
+    log_file="$LOG_DIR/$slug.log"
+
+    if systemctl is-active --quiet "$unit"; then
+      status_text="运行中"
+    else
+      status_text="未运行"
+    fi
+
+    printf '\n[%s] %s:%s 用户:%s 状态:%s\n' "$slug" "$ip" "$port" "$username" "$status_text"
+    printf 'systemd 最近日志:\n'
+    journalctl -u "$unit" -n 20 --no-pager 2>/dev/null || true
+    if [[ -f "$log_file" ]]; then
+      printf '文件日志:\n'
+      tail -n 20 "$log_file" 2>/dev/null || true
+    fi
+  done <<<"$records"
 }
 
 add_manual_user() {
@@ -1339,9 +1329,9 @@ add_manual_user() {
     die "该用户名已存在，请换一个。"
   fi
 
-  read -r -s -p "请输入密码：" password
+  read -r -p "请输入密码：" password
   printf '\n'
-  read -r -s -p "请再次输入密码：" confirm
+  read -r -p "请再次输入密码：" confirm
   printf '\n'
 
   [[ -n "$password" ]] || die "密码不能为空。"
@@ -1491,7 +1481,14 @@ main_menu() {
     printf '%s\n' "10) 从 IP 文件导入并批量生成节点"
     printf '%s\n' "0) 退出"
     printf '%s\n' "========================================"
-    read -r -p "请选择：" choice
+    if ! read -r -p "请选择：" choice; then
+      printf '\n'
+      exit 0
+    fi
+    choice="${choice//[[:space:]]/}"
+    if [[ -z "$choice" ]]; then
+      continue
+    fi
 
     case "$choice" in
       1)
