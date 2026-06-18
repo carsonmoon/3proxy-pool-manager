@@ -30,6 +30,10 @@ BUILD_DIR=""
 SRC_DIR=""
 NODE_USERS=()
 NODE_PASSWORDS=()
+OPENSSL_ROOT_DIR=""
+OPENSSL_INCLUDE_DIR="/usr/include"
+OPENSSL_CRYPTO_LIBRARY=""
+OPENSSL_SSL_LIBRARY=""
 
 usage() {
   cat <<EOF
@@ -139,6 +143,58 @@ rand_alnum() {
   tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$length"
 }
 
+detect_openssl_paths() {
+  OPENSSL_ROOT_DIR="/usr"
+  OPENSSL_INCLUDE_DIR="/usr/include"
+  OPENSSL_CRYPTO_LIBRARY=""
+  OPENSSL_SSL_LIBRARY=""
+
+  local multiarch=""
+  if command -v gcc >/dev/null 2>&1; then
+    multiarch="$(gcc -print-multiarch 2>/dev/null || true)"
+  fi
+  if [[ -z "${multiarch}" ]] && command -v dpkg-architecture >/dev/null 2>&1; then
+    multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${multiarch}" ]]; then
+    local crypto_candidate="/usr/lib/${multiarch}/libcrypto.so"
+    local ssl_candidate="/usr/lib/${multiarch}/libssl.so"
+    [[ -r "${crypto_candidate}" ]] && OPENSSL_CRYPTO_LIBRARY="${crypto_candidate}"
+    [[ -r "${ssl_candidate}" ]] && OPENSSL_SSL_LIBRARY="${ssl_candidate}"
+  fi
+
+  if [[ -z "${OPENSSL_CRYPTO_LIBRARY}" || -z "${OPENSSL_SSL_LIBRARY}" ]]; then
+    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists openssl 2>/dev/null; then
+      local pkg_libdir
+      pkg_libdir="$(pkg-config --variable=libdir openssl 2>/dev/null || true)"
+      if [[ -n "${pkg_libdir}" ]]; then
+        [[ -z "${OPENSSL_CRYPTO_LIBRARY}" && -r "${pkg_libdir}/libcrypto.so" ]] && OPENSSL_CRYPTO_LIBRARY="${pkg_libdir}/libcrypto.so"
+        [[ -z "${OPENSSL_SSL_LIBRARY}" && -r "${pkg_libdir}/libssl.so" ]] && OPENSSL_SSL_LIBRARY="${pkg_libdir}/libssl.so"
+      fi
+    fi
+  fi
+
+  if [[ -z "${OPENSSL_CRYPTO_LIBRARY}" && -r /usr/lib/libcrypto.so ]]; then
+    OPENSSL_CRYPTO_LIBRARY="/usr/lib/libcrypto.so"
+  fi
+  if [[ -z "${OPENSSL_SSL_LIBRARY}" && -r /usr/lib/libssl.so ]]; then
+    OPENSSL_SSL_LIBRARY="/usr/lib/libssl.so"
+  fi
+}
+
+verify_build_deps() {
+  command -v cmake >/dev/null 2>&1 || die "cmake is required."
+  command -v make >/dev/null 2>&1 || die "make is required."
+  command -v git >/dev/null 2>&1 || die "git is required."
+  command -v openssl >/dev/null 2>&1 || die "openssl command is required."
+  [[ -r /usr/include/openssl/ssl.h ]] || die "OpenSSL headers are missing. libssl-dev was not installed correctly."
+  detect_openssl_paths
+  if [[ -z "${OPENSSL_CRYPTO_LIBRARY}" || -z "${OPENSSL_SSL_LIBRARY}" ]]; then
+    warn "Could not auto-detect OpenSSL library paths; CMake will still try standard locations."
+  fi
+}
+
 apt_install_deps() {
   export DEBIAN_FRONTEND=noninteractive
   log "Installing build dependencies..."
@@ -149,7 +205,10 @@ apt_install_deps() {
     git \
     build-essential \
     iproute2 \
+    libssl-dev \
+    openssl \
     pkg-config
+  verify_build_deps
 }
 
 build_3proxy() {
@@ -161,7 +220,22 @@ build_3proxy() {
 
   if command -v cmake >/dev/null 2>&1; then
     log "Building 3proxy with CMake..."
-    if cmake -S "${SRC_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+    local cmake_args=(
+      -S "${SRC_DIR}"
+      -B "${BUILD_DIR}"
+      -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_INSTALL_PREFIX=/usr/local
+      -DOPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR}"
+      -DOPENSSL_INCLUDE_DIR="${OPENSSL_INCLUDE_DIR}"
+    )
+    if [[ -n "${OPENSSL_CRYPTO_LIBRARY}" ]]; then
+      cmake_args+=("-DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_CRYPTO_LIBRARY}")
+    fi
+    if [[ -n "${OPENSSL_SSL_LIBRARY}" ]]; then
+      cmake_args+=("-DOPENSSL_SSL_LIBRARY=${OPENSSL_SSL_LIBRARY}")
+    fi
+
+    if cmake "${cmake_args[@]}" \
       && cmake --build "${BUILD_DIR}" --parallel "$(nproc)" \
       && cmake --install "${BUILD_DIR}"; then
       :
