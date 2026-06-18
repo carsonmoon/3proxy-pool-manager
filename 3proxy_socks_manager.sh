@@ -1583,14 +1583,8 @@ has_nodes() {
   [[ -n "$records" ]]
 }
 
-clear_if_tty() {
-  if [[ -t 1 ]] && command -v clear >/dev/null 2>&1; then
-    clear
-  fi
-}
-
 show_install_summary() {
-  cat <<EOF
+  cat >&2 <<EOF
 
 安装完成。
 
@@ -1614,20 +1608,19 @@ EOF
 
 main_menu() {
   while true; do
-    clear_if_tty
-    printf '\n%s\n' "========================================"
-    printf '%s\n' " $APP_NAME"
-    printf '%s\n' "========================================"
-    printf '%s\n' "1) 安装 / 升级 3proxy"
-    printf '%s\n' "2) 批量生成节点（全量/网卡/CIDR/文件）"
-    printf '%s\n' "3) 查看节点列表 / 按 IP 删除"
-    printf '%s\n' "4) 重启全部节点"
-    printf '%s\n' "5) 查看节点状态"
-    printf '%s\n' "6) 导出代理清单"
-    printf '%s\n' "7) 卸载本工具创建的所有内容"
-    printf '%s\n' "8) 从 IP 文件导入并批量生成节点"
-    printf '%s\n' "0) 退出"
-    printf '%s\n' "========================================"
+    printf '\n%s\n' "========================================" >&2
+    printf '%s\n' " $APP_NAME" >&2
+    printf '%s\n' "========================================" >&2
+    printf '%s\n' "1) 安装 / 升级 3proxy" >&2
+    printf '%s\n' "2) 批量生成节点（全量/网卡/CIDR/文件）" >&2
+    printf '%s\n' "3) 查看节点列表 / 按 IP 删除" >&2
+    printf '%s\n' "4) 重启全部节点" >&2
+    printf '%s\n' "5) 查看节点状态" >&2
+    printf '%s\n' "6) 导出代理清单" >&2
+    printf '%s\n' "7) 卸载本工具创建的所有内容" >&2
+    printf '%s\n' "8) 从 IP 文件导入并批量生成节点" >&2
+    printf '%s\n' "0) 退出" >&2
+    printf '%s\n' "========================================" >&2
     if ! read -r -p "请选择：" choice; then
       printf '\n'
       exit 0
@@ -1699,6 +1692,9 @@ main_menu() {
 }
 
 main() {
+  if [[ -e /dev/tty ]]; then
+    exec </dev/tty >/dev/tty 2>&1
+  fi
   if [[ $# -gt 0 ]]; then
     warn "此脚本为交互式菜单工具，不接受参数。"
   fi
