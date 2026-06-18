@@ -56,3 +56,9 @@
 - 节点服务使用 systemd 模板方式托管，由 systemd 直接管理前台进程。
 - `systemctl status 3proxy` 看到的通常是旧的 `3proxy.service`，真正的节点实例是 `3proxy@节点标识.service`，建议用菜单 5 或 `systemctl status '3proxy@xxx'` 查看。
 - 卸载时会尽量清理脚本、3proxy 二进制、systemd 单元、辅助 launcher、用户组和相关目录。
+
+建议在 Debian 13 上用 root 执行：
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/refs/heads/main/3proxy_socks_manager.sh)
+执行完以后，直接输入：
+sk5
+就能再打开菜单。
