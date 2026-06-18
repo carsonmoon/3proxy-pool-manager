@@ -140,8 +140,20 @@ ensure_dirs() {
 }
 
 install_sk5_launcher() {
-  ln -sfn "$INSTALLED_SCRIPT_PATH" /usr/local/bin/sk5
+  cat >/usr/local/bin/sk5 <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec bash "$INSTALLED_SCRIPT_PATH" "\$@"
+EOF
+  chmod 0755 /usr/local/bin/sk5
   chmod 0755 "$INSTALLED_SCRIPT_PATH" || true
+
+  cat >/etc/profile.d/3proxy-sk5.sh <<'EOF'
+sk5() {
+  /usr/local/bin/sk5 "$@"
+}
+EOF
+  chmod 0644 /etc/profile.d/3proxy-sk5.sh
 }
 
 install_self_copy() {
@@ -1340,7 +1352,7 @@ show_status() {
   printf '用户名: %s\n' "$username"
   printf '端口监听: %s\n' "$listen_state"
   printf 'systemctl status %s\n\n' "$unit"
-  systemctl status "$unit" --no-pager -l 2>/dev/null || true
+  SYSTEMD_COLORS=1 systemctl status "$unit" --no-pager -l 2>/dev/null || true
   printf '\n最近 20 行日志:\n'
   journalctl -u "$unit" -n 20 --no-pager 2>/dev/null || true
 }
@@ -1505,6 +1517,7 @@ uninstall_all() {
   rm -f "$SYSTEMD_TEMPLATE"
   rm -f "$FIREWALL_NFT_SERVICE" "$FIREWALL_NFT_HELPER"
   rm -f /usr/local/bin/sk5
+  rm -f /etc/profile.d/3proxy-sk5.sh
   rm -f "$INDEX_FILE" "$USERS_FILE" "$USERS_MANUAL_FILE"
   rm -f /usr/local/bin/3proxy /usr/local/bin/3proxy_* /usr/local/bin/3proxy-firewall-sync
   rm -rf /usr/local/lib/3proxy /usr/local/share/3proxy
@@ -1639,6 +1652,6 @@ main() {
   main_menu
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]}" == "$0" || "$(basename "${BASH_SOURCE[0]}")" == "sk5" ]]; then
   main "$@"
 fi
