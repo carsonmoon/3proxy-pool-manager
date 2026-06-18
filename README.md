@@ -58,7 +58,9 @@
 - 卸载时会尽量清理脚本、3proxy 二进制、systemd 单元、辅助 launcher、用户组和相关目录。
 
 建议在 Debian 13 上用 root 执行：
+···
 bash <(curl -fsSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/main/3proxy_socks_manager.sh)
+···
 执行完以后，直接输入：
 sk5
 就能再打开菜单。
