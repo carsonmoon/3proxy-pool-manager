@@ -1577,6 +1577,12 @@ uninstall_all() {
   log "清理完成。"
 }
 
+has_nodes() {
+  local records
+  records="$(list_node_records)"
+  [[ -n "$records" ]]
+}
+
 show_install_summary() {
   cat <<EOF
 
@@ -1639,9 +1645,12 @@ main_menu() {
         fi
         build_3proxy
         sync_existing_node_configs
-        restart_all_nodes
+        if has_nodes; then
+          restart_all_nodes
+        else
+          log "当前没有节点，已跳过重启。"
+        fi
         show_install_summary
-        pause
         ;;
       2)
         batch_create_nodes
