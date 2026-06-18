@@ -10,6 +10,7 @@ SRC_DIR="/usr/local/src/3proxy-src"
 PREFIX="/usr/local"
 BIN_PATH="/usr/local/bin/3proxy"
 INSTALLED_SCRIPT_PATH="/usr/local/bin/3proxy_socks_manager.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/refs/heads/main/3proxy_socks_manager.sh"
 BASE_DIR="/etc/3proxy"
 NODE_DIR="/etc/3proxy/nodes"
 LOG_DIR="/var/log/3proxy"
@@ -152,8 +153,18 @@ EOF
 }
 
 install_self_copy() {
-  local source_file="${BASH_SOURCE[0]}"
-  install -m 0755 "$source_file" "$INSTALLED_SCRIPT_PATH"
+  local source_file="${BASH_SOURCE[0]-}"
+  if [[ -n "$source_file" && -f "$source_file" && -r "$source_file" ]]; then
+    install -m 0755 "$source_file" "$INSTALLED_SCRIPT_PATH"
+    return 0
+  fi
+
+  cat >"$INSTALLED_SCRIPT_PATH" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec bash -c 'curl -fsSL "$SCRIPT_URL" | bash' bash "\$@"
+EOF
+  chmod 0755 "$INSTALLED_SCRIPT_PATH"
 }
 
 write_systemd_template() {
@@ -1650,6 +1661,6 @@ main() {
   main_menu
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" || "$(basename "${BASH_SOURCE[0]}")" == "sk5" ]]; then
+if [[ "${BASH_SOURCE[0]-}" == "$0" || "$(basename "${BASH_SOURCE[0]-}" 2>/dev/null)" == "sk5" ]]; then
   main "$@"
 fi
