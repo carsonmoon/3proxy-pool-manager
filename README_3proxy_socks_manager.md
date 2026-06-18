@@ -53,3 +53,5 @@
 - 生成代理清单后可直接用于下游程序，格式为 `ip:port:user:pass`。
 - 如果系统使用的是 UFW、firewalld 或 iptables，脚本会尽量自动放行端口。
 - 如果检测到 `nftables`，脚本会创建独立的同步服务，保证重启后规则仍然保留。
+
+apt update -y && apt install -y wget curl sudo && wget -O 3proxy.sh https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/main/3proxy_socks5_oneclick.sh && chmod +x 3proxy.sh && sudo bash 3proxy.sh
