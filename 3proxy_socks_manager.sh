@@ -38,7 +38,7 @@ DEPS=(
 )
 
 log() {
-  printf '[信息] %s\n' "$*"
+  printf '[信息] %s\n' "$*" >&2
 }
 
 warn() {
@@ -58,6 +58,10 @@ require_root() {
   if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
     die "请使用 root 身份运行此脚本。"
   fi
+}
+
+require_3proxy_installed() {
+  [[ -x "$BIN_PATH" ]] || die "请先使用菜单 1 安装 3proxy。"
 }
 
 has_cmd() {
@@ -206,13 +210,6 @@ prepare_environment() {
   install_sk5_launcher
   if has_cmd nft; then
     ensure_nft_firewall_helper || true
-  fi
-}
-
-ensure_3proxy_ready() {
-  prepare_environment
-  if [[ ! -x "$BIN_PATH" ]]; then
-    build_3proxy
   fi
 }
 
@@ -1061,6 +1058,9 @@ prompt_global_credentials() {
 }
 
 create_node() {
+  require_root
+  require_3proxy_installed
+
   local ip="$1"
   local port="$2"
   local username="$3"
@@ -1138,7 +1138,8 @@ create_node() {
 }
 
 batch_create_nodes_from_ips() {
-  ensure_3proxy_ready
+  require_root
+  require_3proxy_installed
 
   local -a ips=("$@")
   if (( ${#ips[@]} == 0 )); then
@@ -1201,7 +1202,8 @@ batch_create_nodes_from_ips() {
 }
 
 batch_create_nodes() {
-  ensure_3proxy_ready
+  require_root
+  require_3proxy_installed
 
   printf '\n%s\n' "====== 批量生成来源选择 ======"
   printf '%s\n' "1) 自动发现本机全部 IPv4"
@@ -1241,7 +1243,8 @@ batch_create_nodes() {
 }
 
 batch_create_nodes_from_file() {
-  ensure_3proxy_ready
+  require_root
+  require_3proxy_installed
 
   local ip_file
   if [[ $# -ge 1 && -n "${1:-}" ]]; then
@@ -1326,7 +1329,8 @@ show_logs() {
 }
 
 add_manual_user() {
-  ensure_3proxy_ready
+  require_root
+  require_3proxy_installed
 
   local username password confirm
   read -r -p "请输入用户名：" username
@@ -1352,7 +1356,8 @@ add_manual_user() {
 }
 
 remove_manual_user_menu() {
-  ensure_3proxy_ready
+  require_root
+  require_3proxy_installed
   if [[ ! -s "$USERS_MANUAL_FILE" ]]; then
     die "当前没有可删除的手动账号。"
   fi
