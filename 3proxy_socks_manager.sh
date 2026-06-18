@@ -4,6 +4,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 APP_NAME="3proxy SOCKS5 一键管理器"
+REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/refs/heads/main/3proxy_socks_manager.sh"
 REPO_URL="https://github.com/3proxy/3proxy.git"
 REPO_BRANCH="master"
 SRC_DIR="/usr/local/src/3proxy-src"
@@ -22,6 +23,7 @@ FIREWALL_NFT_SERVICE="/etc/systemd/system/3proxy-firewall.service"
 
 DEPS=(
   "git"
+  "curl"
   "ca-certificates"
   "build-essential"
   "cmake"
@@ -133,6 +135,20 @@ ensure_dirs() {
   chmod 0640 "$USERS_MANUAL_FILE" "$USERS_FILE" "$INDEX_FILE"
 }
 
+install_sk5_launcher() {
+  cat >/usr/local/bin/sk5 <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+tmp="\$(mktemp)"
+trap 'rm -f "\$tmp"' EXIT
+
+curl -fsSL "$REMOTE_SCRIPT_URL" -o "\$tmp"
+exec bash "\$tmp" "\$@"
+EOF
+  chmod 0755 /usr/local/bin/sk5
+}
+
 write_systemd_template() {
   cat >"$SYSTEMD_TEMPLATE" <<'EOF'
 [Unit]
@@ -187,6 +203,7 @@ prepare_environment() {
   ensure_service_user
   ensure_dirs
   write_systemd_template
+  install_sk5_launcher
   if has_cmd nft; then
     ensure_nft_firewall_helper || true
   fi
@@ -384,10 +401,12 @@ manual_username_exists() {
 
 node_username_exists() {
   local username="$1"
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     return 1
   fi
-  awk -F'\t' -v user="$username" '$4 == user { found=1 } END { exit found ? 0 : 1 }' "$INDEX_FILE"
+  printf '%s\n' "$records" | awk -F'\t' -v user="$username" '$4 == user { found=1 } END { exit found ? 0 : 1 }'
 }
 
 username_exists_anywhere() {
@@ -405,10 +424,12 @@ port_in_use() {
 node_exists() {
   local ip="$1"
   local port="$2"
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     return 1
   fi
-  awk -F'\t' -v ip="$ip" -v port="$port" '$2 == ip && $3 == port { found=1 } END { exit found ? 0 : 1 }' "$INDEX_FILE"
+  printf '%s\n' "$records" | awk -F'\t' -v ip="$ip" -v port="$port" '$2 == ip && $3 == port { found=1 } END { exit found ? 0 : 1 }'
 }
 
 current_node_ports_csv() {
@@ -429,9 +450,7 @@ ensure_nft_firewall_helper() {
 set -euo pipefail
 
 INDEX_FILE="/etc/3proxy/nodes.tsv"
-TABLE_FAMILY="inet"
-TABLE_NAME="3proxy_manager"
-CHAIN_NAME="input"
+INPUT_CHAIN="inet filter input"
 
 ports_csv="$(
   awk -F'\t' 'NF >= 3 && $3 ~ /^[0-9]+$/ { print $3 }' "$INDEX_FILE" 2>/dev/null \
@@ -439,16 +458,19 @@ ports_csv="$(
     | paste -sd, -
 )"
 
-nft delete table "$TABLE_FAMILY" "$TABLE_NAME" >/dev/null 2>&1 || true
-nft add table "$TABLE_FAMILY" "$TABLE_NAME"
-nft add chain "$TABLE_FAMILY" "$TABLE_NAME" "$CHAIN_NAME" '{ type filter hook input priority -300; policy accept; }'
+if ! nft list chain inet filter input >/dev/null 2>&1; then
+  echo "nftables 未找到 inet filter input 链，跳过自动放行。" >&2
+  exit 0
+fi
 
 if [[ -n "$ports_csv" ]]; then
-  if [[ "$ports_csv" == *,* ]]; then
-    nft add rule "$TABLE_FAMILY" "$TABLE_NAME" "$CHAIN_NAME" tcp dport "{ $ports_csv }" accept
-  else
-    nft add rule "$TABLE_FAMILY" "$TABLE_NAME" "$CHAIN_NAME" tcp dport "$ports_csv" accept
-  fi
+  IFS=',' read -r -a ports <<<"$ports_csv"
+  for port in "${ports[@]}"; do
+    if nft list chain inet filter input 2>/dev/null | grep -Eq "tcp dport ${port} .*accept"; then
+      continue
+    fi
+    nft add rule inet filter input tcp dport "$port" accept comment "3proxy"
+  done
 fi
 EOF
 
@@ -492,7 +514,7 @@ firewall_backend() {
     return 0
   fi
 
-  if has_cmd nft; then
+  if has_cmd nft && nft list chain inet filter input >/dev/null 2>&1; then
     printf 'nft\n'
     return 0
   fi
@@ -607,8 +629,74 @@ rebuild_effective_users() {
   chmod 0640 "$USERS_MANUAL_FILE" "$USERS_FILE" "$INDEX_FILE"
 }
 
+cfg_comment_value() {
+  local cfg="$1"
+  local key="$2"
+  local value
+  value="$(
+    awk -v key="$key" '
+      BEGIN { pat1 = "^# " key ":"; pat2 = "^# " key "：" }
+      $0 ~ pat1 || $0 ~ pat2 {
+        sub(/^# [^:：]+[:：][[:space:]]*/, "", $0)
+        print
+        exit
+      }
+    ' "$cfg" 2>/dev/null || true
+  )"
+  printf '%s\n' "$value"
+}
+
+record_from_cfg() {
+  local cfg="$1"
+  local slug ip port username password created
+  slug="$(cfg_comment_value "$cfg" "节点")"
+  [[ -n "$slug" ]] || slug="$(cfg_comment_value "$cfg" "slug")"
+  [[ -n "$slug" ]] || slug="$(basename "$cfg" .cfg)"
+
+  ip="$(cfg_comment_value "$cfg" "监听IP")"
+  [[ -n "$ip" ]] || ip="$(cfg_comment_value "$cfg" "listen_ip")"
+
+  port="$(cfg_comment_value "$cfg" "监听端口")"
+  [[ -n "$port" ]] || port="$(cfg_comment_value "$cfg" "listen_port")"
+
+  username="$(awk '$1 == "allow" { print $2; exit }' "$cfg" 2>/dev/null || true)"
+  password=""
+  if [[ -n "$username" ]]; then
+    password="$(awk -F: -v user="$username" '$1 == user { print $3; exit }' "$USERS_FILE" 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$password" ]]; then
+    password="$(cfg_comment_value "$cfg" "密码")"
+    [[ -n "$password" ]] || password="$(cfg_comment_value "$cfg" "password")"
+  fi
+
+  created="$(cfg_comment_value "$cfg" "创建时间")"
+  [[ -n "$created" ]] || created="$(cfg_comment_value "$cfg" "created")"
+  [[ -n "$created" ]] || created="$(date +%F\ %T)"
+
+  if [[ -n "$ip" && -n "$port" ]]; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$slug" "$ip" "$port" "$username" "$password" "$created"
+  fi
+}
+
+list_node_records() {
+  if [[ -s "$INDEX_FILE" ]]; then
+    awk -F'\t' 'NF >= 6 { print }' "$INDEX_FILE"
+    return 0
+  fi
+
+  shopt -s nullglob
+  local cfg
+  for cfg in "$NODE_DIR"/*.cfg; do
+    record_from_cfg "$cfg" || true
+  done
+  shopt -u nullglob
+}
+
 list_nodes() {
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     printf '当前没有已生成的节点。\n'
     return 0
   fi
@@ -628,7 +716,7 @@ list_nodes() {
     fi
     printf '%-4s %-26s %-16s %-8s %-18s %-14s\n' "$no" "$slug" "$ip" "$port" "$username" "$status"
     no=$((no + 1))
-  done <"$INDEX_FILE"
+  done <<<"$records"
 }
 
 list_users() {
@@ -653,7 +741,9 @@ list_users() {
 }
 
 select_node_slug() {
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     die "当前没有可操作的节点。"
   fi
 
@@ -661,7 +751,7 @@ select_node_slug() {
   while IFS=$'\t' read -r slug ip port username password created; do
     [[ -n "${slug:-}" ]] || continue
     entries+=("$slug|$ip|$port|$username|$created")
-  done <"$INDEX_FILE"
+  done <<<"$records"
 
   local i
   printf '\n'
@@ -692,6 +782,9 @@ write_node_config() {
 # 节点: $slug
 # 监听IP: $ip
 # 监听端口: $port
+# 用户名: $username
+# 密码: $password
+# 创建时间: $(date +%F\ %T)
 
 nserver 1.1.1.1
 nserver 8.8.8.8
@@ -706,7 +799,7 @@ external $ip
 log $LOG_DIR/$slug.log D
 rotate 30
 maxconn 1024
-socks -p$port
+socks -p$port -i$ip -e$ip
 EOF
 
   chown root:3proxy "$cfg"
@@ -730,14 +823,16 @@ reload_node_service() {
 }
 
 reload_all_nodes() {
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     return 0
   fi
 
   while IFS=$'\t' read -r slug ip port username password created; do
     [[ -n "${slug:-}" ]] || continue
     reload_node_service "$slug" || true
-  done <"$INDEX_FILE"
+  done <<<"$records"
 }
 
 random_unique_username() {
@@ -791,6 +886,12 @@ create_node() {
   validate_ipv4 "$ip" || die "IP 地址无效或不是 IPv4：$ip"
   (( port >= 1 && port <= 65535 )) || die "端口超出范围：$port"
 
+  if ! ip_is_local "$ip"; then
+    warn "IP 未绑定到本机网卡：$ip"
+    warn "请先把该 IP 配置到服务器网卡后再生成节点，否则 3proxy 无法成功监听。"
+    return 1
+  fi
+
   slug="$(slug_from_ip_port "$ip" "$port")"
   cfg="$(node_cfg_path "$slug")"
   unit="$(service_name "$slug")"
@@ -823,6 +924,20 @@ create_node() {
   systemctl daemon-reload
   if ! start_node_service "$slug"; then
     warn "节点启动失败，正在回滚：$ip:$port"
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    rm -f "$cfg"
+    remove_node_record "$slug"
+    rebuild_effective_users
+    if [[ "$(firewall_backend)" == "nft" ]]; then
+      sync_nft_firewall_rules || true
+    fi
+    systemctl daemon-reload
+    return 1
+  fi
+
+  if ! systemctl is-active --quiet "$unit"; then
+    warn "节点服务未进入运行状态：$unit"
+    journalctl -u "$unit" -n 20 --no-pager 2>/dev/null || true
     systemctl disable --now "$unit" >/dev/null 2>&1 || true
     rm -f "$cfg"
     remove_node_record "$slug"
@@ -1011,7 +1126,9 @@ remove_node() {
 
 restart_all_nodes() {
   ensure_3proxy_ready
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     log "当前没有节点可重启。"
     return 0
   fi
@@ -1021,14 +1138,16 @@ restart_all_nodes() {
     local unit
     unit="$(service_name "$slug")"
     systemctl restart "$unit"
-  done <"$INDEX_FILE"
+  done <<<"$records"
 
   log "全部节点已重启。"
 }
 
 show_status() {
   ensure_3proxy_ready
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     printf '当前没有已配置节点。\n'
     return 0
   fi
@@ -1048,12 +1167,14 @@ show_status() {
     fi
     printf '%-4s %-26s %-16s %-8s %-18s %-14s\n' "$no" "$slug" "$ip" "$port" "$username" "$status"
     no=$((no + 1))
-  done <"$INDEX_FILE"
+  done <<<"$records"
 }
 
 export_proxy_list() {
   ensure_3proxy_ready
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     die "当前没有可导出的代理。"
   fi
 
@@ -1063,7 +1184,7 @@ export_proxy_list() {
   out_path="$(expand_path "$out_path")"
 
   mkdir -p "$(dirname "$out_path")"
-  awk -F'\t' 'NF >= 5 { printf "%s:%s:%s:%s\n", $2, $3, $4, $5 }' "$INDEX_FILE" >"$out_path"
+  printf '%s\n' "$records" | awk -F'\t' 'NF >= 5 && $2 != "" && $3 != "" && $4 != "" && $5 != "" { printf "%s:%s:%s:%s\n", $2, $3, $4, $5 }' >"$out_path"
   chmod 0600 "$out_path" || true
 
   log "代理清单已导出：$out_path"
@@ -1071,7 +1192,9 @@ export_proxy_list() {
 
 show_logs() {
   ensure_3proxy_ready
-  if [[ ! -s "$INDEX_FILE" ]]; then
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
     die "当前没有节点。"
   fi
 
@@ -1081,7 +1204,13 @@ show_logs() {
   log_file="$LOG_DIR/$slug.log"
 
   printf '\n配置文件：%s\n日志文件：%s\n\n' "$cfg" "$log_file"
-  tail -n 100 "$log_file" 2>/dev/null || true
+  systemctl status --no-pager "$(service_name "$slug")" 2>/dev/null || true
+  printf '\n'
+  journalctl -u "$(service_name "$slug")" -n 100 --no-pager 2>/dev/null || true
+  if [[ -f "$log_file" ]]; then
+    printf '\n文件日志：\n'
+    tail -n 100 "$log_file" 2>/dev/null || true
+  fi
 }
 
 add_manual_user() {
@@ -1207,6 +1336,7 @@ show_install_summary() {
   2. 使用菜单 9 导出代理清单，格式为 ip:port:user:pass。
   3. 批量生成时可以按网卡、CIDR，或者直接导入 IP 文件。
   4. 如果需要额外独立账号，可在“用户管理”里添加手动账号。
+  5. 后续可以直接输入 `sk5` 打开菜单。
 
 配置目录：
   $BASE_DIR
