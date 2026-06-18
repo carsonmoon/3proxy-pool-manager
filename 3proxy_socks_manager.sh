@@ -140,12 +140,8 @@ ensure_dirs() {
 }
 
 install_sk5_launcher() {
-  cat >/usr/local/bin/sk5 <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "$INSTALLED_SCRIPT_PATH" "\$@"
-EOF
-  chmod 0755 /usr/local/bin/sk5
+  ln -sfn "$INSTALLED_SCRIPT_PATH" /usr/local/bin/sk5
+  chmod 0755 "$INSTALLED_SCRIPT_PATH" || true
 }
 
 install_self_copy() {
@@ -552,6 +548,25 @@ print_node_table() {
 
     no=$((no + 1))
   done <<<"$records"
+}
+
+node_record_by_index() {
+  local target_index="$1"
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$records" | awk -F'\t' -v target="$target_index" '
+    NF >= 6 {
+      count++
+      if (count == target) {
+        print
+        exit
+      }
+    }
+  '
 }
 
 manual_username_exists() {
@@ -1292,7 +1307,42 @@ show_status() {
   require_root
   show_runtime_overview
   printf '\n'
-  print_node_table || true
+  if ! print_node_table; then
+    return 0
+  fi
+
+  printf '\n'
+  local choice record slug ip port username password created unit
+  read -r -p "请输入节点序号查看 systemctl status（留空返回）：" choice
+  choice="${choice//[[:space:]]/}"
+  if [[ -z "$choice" ]]; then
+    return 0
+  fi
+  [[ "$choice" =~ ^[0-9]+$ ]] || die "序号必须是数字。"
+
+  record="$(node_record_by_index "$choice")"
+  if [[ -z "$record" ]]; then
+    die "没有找到序号为 $choice 的节点。"
+  fi
+
+  IFS=$'\t' read -r slug ip port username password created <<<"$record"
+  unit="$(service_name "$slug")"
+  listen_state="否"
+  if port_is_listening "$port"; then
+    listen_state="是"
+  fi
+
+  printf '\n====== 节点详情 ======\n'
+  printf '序号: %s\n' "$choice"
+  printf '节点: %s\n' "$slug"
+  printf 'IP: %s\n' "$ip"
+  printf '端口: %s\n' "$port"
+  printf '用户名: %s\n' "$username"
+  printf '端口监听: %s\n' "$listen_state"
+  printf 'systemctl status %s\n\n' "$unit"
+  systemctl status "$unit" --no-pager -l 2>/dev/null || true
+  printf '\n最近 20 行日志:\n'
+  journalctl -u "$unit" -n 20 --no-pager 2>/dev/null || true
 }
 
 export_proxy_list() {
