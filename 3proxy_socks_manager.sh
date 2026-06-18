@@ -425,6 +425,111 @@ service_name() {
   printf '%s%s' "$SERVICE_PREFIX" "$slug"
 }
 
+node_service_state() {
+  local unit="$1"
+  local load_state active_state sub_state result main_pid enabled_state
+
+  load_state="$(systemctl show -p LoadState --value "$unit" 2>/dev/null || printf 'unknown')"
+  active_state="$(systemctl show -p ActiveState --value "$unit" 2>/dev/null || printf 'unknown')"
+  sub_state="$(systemctl show -p SubState --value "$unit" 2>/dev/null || printf 'unknown')"
+  result="$(systemctl show -p Result --value "$unit" 2>/dev/null || printf 'unknown')"
+  main_pid="$(systemctl show -p MainPID --value "$unit" 2>/dev/null || printf '0')"
+  enabled_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+  [[ -n "$enabled_state" ]] || enabled_state="unknown"
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$load_state" \
+    "$active_state" \
+    "$sub_state" \
+    "$result" \
+    "$main_pid" \
+    "$enabled_state"
+}
+
+show_runtime_overview() {
+  printf '%s\n' "====== 运行概览 ======"
+  if [[ -x "$BIN_PATH" ]]; then
+    printf '3proxy 二进制: 已安装 (%s)\n' "$BIN_PATH"
+  else
+    printf '3proxy 二进制: 未安装 (%s)\n' "$BIN_PATH"
+  fi
+
+  if [[ -d "$BASE_DIR" ]]; then
+    printf '配置目录: %s\n' "$BASE_DIR"
+  else
+    printf '配置目录: 不存在 (%s)\n' "$BASE_DIR"
+  fi
+
+  local pids
+  pids="$(pgrep -af "$BIN_PATH" 2>/dev/null || true)"
+  if [[ -n "$pids" ]]; then
+    printf '3proxy 进程: 发现运行中的实例\n'
+    printf '%s\n' "$pids" | sed 's/^/  /'
+  else
+    printf '3proxy 进程: 未发现运行中的实例\n'
+  fi
+}
+
+print_node_table() {
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
+    printf '当前没有已生成的节点。\n'
+    return 1
+  fi
+
+  printf '%-4s %-26s %-16s %-8s %-18s %-12s %-10s\n' "序号" "节点标识" "IP" "端口" "用户名" "状态" "启用"
+  printf '%s\n' "------------------------------------------------------------------------------------------------"
+
+  local no=1
+  while IFS=$'\t' read -r slug ip port username password created; do
+    [[ -n "${slug:-}" ]] || continue
+    local unit load_state active_state sub_state result main_pid enabled_state status_text
+    unit="$(service_name "$slug")"
+    read -r load_state active_state sub_state result main_pid enabled_state <<<"$(node_service_state "$unit")"
+
+    case "$active_state" in
+      active)
+        status_text="运行中"
+        ;;
+      failed)
+        status_text="失败"
+        ;;
+      activating)
+        status_text="启动中"
+        ;;
+      inactive)
+        status_text="未运行"
+        ;;
+      *)
+        status_text="${active_state:-unknown}"
+        ;;
+    esac
+
+    printf '%-4s %-26s %-16s %-8s %-18s %-12s %-10s\n' \
+      "$no" \
+      "$slug" \
+      "$ip" \
+      "$port" \
+      "$username" \
+      "$status_text" \
+      "$enabled_state"
+
+    if [[ "$active_state" != "active" ]]; then
+      printf '     详情: load=%s sub=%s result=%s pid=%s\n' \
+        "$load_state" \
+        "$sub_state" \
+        "$result" \
+        "$main_pid"
+      if [[ "$result" != "success" ]]; then
+        journalctl -u "$unit" -n 8 --no-pager 2>/dev/null | sed 's/^/     日志: /' || true
+      fi
+    fi
+
+    no=$((no + 1))
+  done <<<"$records"
+}
+
 manual_username_exists() {
   local username="$1"
   if [[ ! -s "$USERS_MANUAL_FILE" ]]; then
@@ -728,29 +833,73 @@ list_node_records() {
 }
 
 list_nodes() {
-  local records
-  records="$(list_node_records)"
-  if [[ -z "$records" ]]; then
-    printf '当前没有已生成的节点。\n'
+  if ! print_node_table; then
     return 0
   fi
 
-  printf '%-4s %-26s %-16s %-8s %-18s %-14s\n' "序号" "节点标识" "IP" "端口" "用户名" "状态"
-  printf '%s\n' "--------------------------------------------------------------------------------"
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    return 0
+  fi
 
-  local no=1
+  printf '\n'
+  local delete_ip
+  read -r -p "输入要删除的 IP（留空返回）：" delete_ip
+  delete_ip="${delete_ip// /}"
+  if [[ -z "$delete_ip" ]]; then
+    return 0
+  fi
+
+  delete_nodes_by_ip "$delete_ip"
+}
+
+delete_nodes_by_ip() {
+  require_root
+  local target_ip="$1"
+  validate_ipv4 "$target_ip" || die "IP 地址无效或不是 IPv4：$target_ip"
+
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
+    die "当前没有可删除的节点。"
+  fi
+
+  local -a matches=()
   while IFS=$'\t' read -r slug ip port username password created; do
     [[ -n "${slug:-}" ]] || continue
-    local unit status
-    unit="$(service_name "$slug")"
-    if systemctl is-active --quiet "$unit"; then
-      status="运行中"
-    else
-      status="未运行"
-    fi
-    printf '%-4s %-26s %-16s %-8s %-18s %-14s\n' "$no" "$slug" "$ip" "$port" "$username" "$status"
-    no=$((no + 1))
+    [[ "$ip" == "$target_ip" ]] || continue
+    matches+=("$slug|$ip|$port|$username|$created")
   done <<<"$records"
+
+  if (( ${#matches[@]} == 0 )); then
+    warn "没有找到 IP 为 $target_ip 的节点。"
+    return 0
+  fi
+
+  printf '\n将删除以下节点：\n'
+  local item slug ip port username created
+  for item in "${matches[@]}"; do
+    IFS='|' read -r slug ip port username created <<<"$item"
+    printf '  %s  [%s:%s]  用户:%s  创建:%s\n' "$slug" "$ip" "$port" "$username" "$created"
+  done
+
+  local answer
+  read -r -p "确认删除上述 IP 相关节点吗？[y/N]：" answer
+  [[ "${answer:-N}" =~ ^[Yy]$ ]] || die "已取消。"
+
+  for item in "${matches[@]}"; do
+    IFS='|' read -r slug ip port username created <<<"$item"
+    systemctl disable --now "$(service_name "$slug")" >/dev/null 2>&1 || true
+    rm -f "$(node_cfg_path "$slug")"
+    remove_node_record "$slug"
+  done
+
+  rebuild_effective_users
+  if [[ "$(firewall_backend)" == "nft" ]]; then
+    sync_nft_firewall_rules || true
+  fi
+  systemctl daemon-reload
+
+  log "已删除 IP 为 $target_ip 的 ${#matches[@]} 个节点。"
 }
 
 list_users() {
@@ -1107,60 +1256,8 @@ batch_create_nodes_from_file() {
   batch_create_nodes_from_ips "${ips[@]}"
 }
 
-manual_add_node() {
-  ensure_3proxy_ready
-
-  local ip port mode username password pair
-  read -r -p "请输入要绑定的 IP：" ip
-  validate_ipv4 "$ip" || die "IP 地址无效或不是 IPv4。"
-
-  read -r -p "请输入端口 [1080]：" port
-  port="${port:-1080}"
-  [[ "$port" =~ ^[0-9]+$ ]] || die "端口必须是数字。"
-
-  printf '\n1) 统一用户名密码\n2) 随机用户名密码\n'
-  read -r -p "请选择账号模式：" mode
-  if [[ "$mode" == "1" ]]; then
-    pair="$(prompt_global_credentials)"
-    username="${pair%%$'\t'*}"
-    password="${pair#*$'\t'}"
-  elif [[ "$mode" == "2" ]]; then
-    username="$(random_unique_username)"
-    password="$(random_unique_password)"
-  else
-    die "账号模式选择无效。"
-  fi
-
-  if ! create_node "$ip" "$port" "$username" "$password"; then
-    die "节点创建失败。"
-  fi
-  rebuild_effective_users
-}
-
-remove_node() {
-  ensure_3proxy_ready
-  local slug unit cfg
-  slug="$(select_node_slug)"
-  unit="$(service_name "$slug")"
-  cfg="$(node_cfg_path "$slug")"
-
-  read -r -p "确认删除该节点吗？[y/N]：" answer
-  [[ "${answer:-N}" =~ ^[Yy]$ ]] || die "已取消。"
-
-  systemctl disable --now "$unit" >/dev/null 2>&1 || true
-  rm -f "$cfg"
-  remove_node_record "$slug"
-  rebuild_effective_users
-  if [[ "$(firewall_backend)" == "nft" ]]; then
-    sync_nft_firewall_rules || true
-  fi
-  systemctl daemon-reload
-
-  log "节点已删除。"
-}
-
 restart_all_nodes() {
-  ensure_3proxy_ready
+  require_root
   local records
   records="$(list_node_records)"
   if [[ -z "$records" ]]; then
@@ -1179,34 +1276,14 @@ restart_all_nodes() {
 }
 
 show_status() {
-  ensure_3proxy_ready
-  local records
-  records="$(list_node_records)"
-  if [[ -z "$records" ]]; then
-    printf '当前没有已配置节点。\n'
-    return 0
-  fi
-
-  printf '%-4s %-26s %-16s %-8s %-18s %-14s\n' "序号" "节点标识" "IP" "端口" "用户名" "状态"
-  printf '%s\n' "--------------------------------------------------------------------------------"
-
-  local no=1
-  while IFS=$'\t' read -r slug ip port username password created; do
-    [[ -n "${slug:-}" ]] || continue
-    local unit status
-    unit="$(service_name "$slug")"
-    if systemctl is-active --quiet "$unit"; then
-      status="运行中"
-    else
-      status="未运行"
-    fi
-    printf '%-4s %-26s %-16s %-8s %-18s %-14s\n' "$no" "$slug" "$ip" "$port" "$username" "$status"
-    no=$((no + 1))
-  done <<<"$records"
+  require_root
+  show_runtime_overview
+  printf '\n'
+  print_node_table || true
 }
 
 export_proxy_list() {
-  ensure_3proxy_ready
+  require_root
   local records
   records="$(list_node_records)"
   if [[ -z "$records" ]]; then
@@ -1226,7 +1303,7 @@ export_proxy_list() {
 }
 
 show_logs() {
-  ensure_3proxy_ready
+  require_root
   local records
   records="$(list_node_records)"
   if [[ -z "$records" ]]; then
@@ -1350,12 +1427,19 @@ uninstall_all() {
   systemctl disable --now "$(basename "$FIREWALL_NFT_SERVICE")" >/dev/null 2>&1 || true
   rm -f "$SYSTEMD_TEMPLATE"
   rm -f "$FIREWALL_NFT_SERVICE" "$FIREWALL_NFT_HELPER"
+  rm -f /usr/local/bin/sk5
   rm -f "$INDEX_FILE" "$USERS_FILE" "$USERS_MANUAL_FILE"
-  rm -f /usr/local/bin/3proxy /usr/local/bin/3proxy_*
+  rm -f /usr/local/bin/3proxy /usr/local/bin/3proxy_* /usr/local/bin/3proxy-firewall-sync
   rm -rf /usr/local/lib/3proxy /usr/local/share/3proxy
   rm -rf "$SRC_DIR"
   rm -rf "$NODE_DIR" "$BASE_DIR"
   rm -rf "$LOG_DIR"
+  if id -u 3proxy >/dev/null 2>&1; then
+    userdel 3proxy >/dev/null 2>&1 || true
+  fi
+  if getent group 3proxy >/dev/null 2>&1; then
+    groupdel 3proxy >/dev/null 2>&1 || true
+  fi
 
   systemctl daemon-reload
   log "清理完成。"
@@ -1368,10 +1452,11 @@ show_install_summary() {
 
 下一步建议：
   1. 使用菜单 2 批量生成节点（全量/网卡/CIDR/文件）。
-  2. 使用菜单 9 导出代理清单，格式为 ip:port:user:pass。
-  3. 批量生成时可以按网卡、CIDR，或者直接导入 IP 文件。
-  4. 如果需要额外独立账号，可在“用户管理”里添加手动账号。
-  5. 后续可以直接输入 `sk5` 打开菜单。
+ 2. 使用菜单 3 查看节点列表，并可直接按 IP 删除不需要的节点。
+ 3. 使用菜单 7 导出代理清单，格式为 ip:port:user:pass。
+ 4. 批量生成时可以按网卡、CIDR，或者直接导入 IP 文件。
+ 5. 如果需要额外独立账号，可在“用户管理”里添加手动账号。
+ 6. 后续可以直接输入 `sk5` 打开菜单。
 
 配置目录：
   $BASE_DIR
@@ -1391,68 +1476,65 @@ main_menu() {
     printf '%s\n' "========================================"
     printf '%s\n' "1) 安装 / 升级 3proxy"
     printf '%s\n' "2) 批量生成节点（全量/网卡/CIDR/文件）"
-    printf '%s\n' "3) 手动新增单个节点"
-    printf '%s\n' "4) 删除节点"
-    printf '%s\n' "5) 查看节点列表"
-    printf '%s\n' "6) 用户管理（独立账号）"
-    printf '%s\n' "7) 重启全部节点"
-    printf '%s\n' "8) 查看节点状态"
-    printf '%s\n' "9) 导出代理清单"
-    printf '%s\n' "10) 查看节点日志"
-    printf '%s\n' "11) 卸载本工具创建的所有内容"
-    printf '%s\n' "12) 从 IP 文件导入并批量生成节点"
+    printf '%s\n' "3) 查看节点列表 / 按 IP 删除"
+    printf '%s\n' "4) 用户管理（独立账号）"
+    printf '%s\n' "5) 重启全部节点"
+    printf '%s\n' "6) 查看节点状态"
+    printf '%s\n' "7) 导出代理清单"
+    printf '%s\n' "8) 查看节点日志"
+    printf '%s\n' "9) 卸载本工具创建的所有内容"
+    printf '%s\n' "10) 从 IP 文件导入并批量生成节点"
     printf '%s\n' "0) 退出"
     printf '%s\n' "========================================"
     read -r -p "请选择：" choice
 
     case "$choice" in
       1)
-        ensure_3proxy_ready
+        require_root
+        detect_os
+        install_dependencies
+        ensure_service_user
+        ensure_dirs
+        write_systemd_template
+        install_sk5_launcher
+        if has_cmd nft; then
+          ensure_nft_firewall_helper || true
+        fi
         build_3proxy
         show_install_summary
-        pause
         ;;
       2)
         batch_create_nodes
         pause
         ;;
       3)
-        manual_add_node
-        pause
-        ;;
-      4)
-        remove_node
-        pause
-        ;;
-      5)
-        ensure_3proxy_ready
         list_nodes
         pause
         ;;
-      6)
+      4)
         user_menu
         ;;
-      7)
+      5)
         restart_all_nodes
         pause
         ;;
-      8)
+      6)
         show_status
         pause
         ;;
-      9)
+      7)
         export_proxy_list
         pause
         ;;
-      10)
+      8)
         show_logs
         pause
         ;;
-      11)
+      9)
         uninstall_all
         pause
         ;;
-      12)
+      10)
         batch_create_nodes_from_file
         pause
         ;;
