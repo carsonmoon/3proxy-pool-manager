@@ -141,8 +141,19 @@ ensure_dirs() {
 }
 
 install_sk5_launcher() {
-  install -m 0755 "$INSTALLED_SCRIPT_PATH" /usr/local/bin/sk5
-  install -m 0755 "$INSTALLED_SCRIPT_PATH" /usr/bin/sk5 || true
+  cat >/usr/local/bin/sk5 <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+tmp="\$(mktemp /tmp/3proxy-socks-manager.XXXXXX.sh)"
+trap 'rm -f "\$tmp"' EXIT
+
+curl -fsSL "$SCRIPT_URL" -o "\$tmp"
+source "\$tmp"
+main "\$@"
+EOF
+  chmod 0755 /usr/local/bin/sk5
+  ln -sfn /usr/local/bin/sk5 /usr/bin/sk5
 
   cat >/etc/profile.d/3proxy-sk5.sh <<'EOF'
 sk5() {
@@ -152,18 +163,36 @@ EOF
   chmod 0644 /etc/profile.d/3proxy-sk5.sh
 }
 
+is_valid_installed_script() {
+  local file="$1"
+  [[ -f "$file" && -r "$file" ]] || return 1
+  grep -q '^main_menu() {' "$file" || return 1
+  grep -q '^main() {' "$file" || return 1
+  ! grep -q 'exec /usr/local/bin/3proxy_socks_manager.sh' "$file"
+}
+
 install_self_copy() {
   local source_file="${BASH_SOURCE[0]-}"
-  if [[ -n "$source_file" && -f "$source_file" && -r "$source_file" ]]; then
+  local source_real target_real
+  source_real="$(readlink -f "$source_file" 2>/dev/null || printf '%s' "$source_file")"
+  target_real="$(readlink -f "$INSTALLED_SCRIPT_PATH" 2>/dev/null || printf '%s' "$INSTALLED_SCRIPT_PATH")"
+
+  if is_valid_installed_script "$INSTALLED_SCRIPT_PATH"; then
+    return 0
+  fi
+
+  if [[ -n "$source_file" && -f "$source_file" && -r "$source_file" && "$source_real" != "$target_real" ]]; then
     install -m 0755 "$source_file" "$INSTALLED_SCRIPT_PATH"
     return 0
   fi
 
-  cat >"$INSTALLED_SCRIPT_PATH" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec bash -c 'curl -fsSL "$SCRIPT_URL" | bash' bash "\$@"
-EOF
+  if [[ ! -x "$INSTALLED_SCRIPT_PATH" ]]; then
+    curl -fsSL "$SCRIPT_URL" -o "$INSTALLED_SCRIPT_PATH"
+    chmod 0755 "$INSTALLED_SCRIPT_PATH"
+    return 0
+  fi
+
+  curl -fsSL "$SCRIPT_URL" -o "$INSTALLED_SCRIPT_PATH"
   chmod 0755 "$INSTALLED_SCRIPT_PATH"
 }
 
