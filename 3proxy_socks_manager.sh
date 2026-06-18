@@ -4,12 +4,12 @@ set -euo pipefail
 IFS=$'\n\t'
 
 APP_NAME="3proxy SOCKS5 一键管理器"
-REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/refs/heads/main/3proxy_socks_manager.sh"
 REPO_URL="https://github.com/3proxy/3proxy.git"
 REPO_BRANCH="master"
 SRC_DIR="/usr/local/src/3proxy-src"
 PREFIX="/usr/local"
 BIN_PATH="/usr/local/bin/3proxy"
+INSTALLED_SCRIPT_PATH="/usr/local/bin/3proxy_socks_manager.sh"
 BASE_DIR="/etc/3proxy"
 NODE_DIR="/etc/3proxy/nodes"
 LOG_DIR="/var/log/3proxy"
@@ -143,14 +143,14 @@ install_sk5_launcher() {
   cat >/usr/local/bin/sk5 <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-
-tmp="\$(mktemp)"
-trap 'rm -f "\$tmp"' EXIT
-
-curl -fsSL "$REMOTE_SCRIPT_URL" -o "\$tmp"
-exec bash "\$tmp" "\$@"
+exec "$INSTALLED_SCRIPT_PATH" "\$@"
 EOF
   chmod 0755 /usr/local/bin/sk5
+}
+
+install_self_copy() {
+  local source_file="${BASH_SOURCE[0]}"
+  install -m 0755 "$source_file" "$INSTALLED_SCRIPT_PATH"
 }
 
 write_systemd_template() {
@@ -168,6 +168,7 @@ ExecStart=/usr/local/bin/3proxy /etc/3proxy/nodes/%i.cfg
 ExecReload=/bin/kill -USR1 $MAINPID
 Restart=on-failure
 RestartSec=2
+LimitNOFILE=65536
 NoNewPrivileges=true
 
 [Install]
@@ -467,6 +468,21 @@ show_runtime_overview() {
   fi
 }
 
+sync_existing_node_configs() {
+  local records
+  records="$(list_node_records)"
+  if [[ -z "$records" ]]; then
+    return 0
+  fi
+
+  while IFS=$'\t' read -r slug ip port username password created; do
+    [[ -n "${slug:-}" ]] || continue
+    write_node_config "$slug" "$ip" "$port" "$username" "$password"
+  done <<<"$records"
+
+  systemctl daemon-reload
+}
+
 print_node_table() {
   local records
   records="$(list_node_records)"
@@ -475,27 +491,36 @@ print_node_table() {
     return 1
   fi
 
-  printf '%-4s %-26s %-16s %-8s %-18s %-12s %-10s\n' "序号" "节点标识" "IP" "端口" "用户名" "状态" "启用"
-  printf '%s\n' "------------------------------------------------------------------------------------------------"
+  printf '%-4s %-26s %-16s %-8s %-18s %-12s %-10s %-10s\n' "序号" "节点标识" "IP" "端口" "用户名" "状态" "启用" "监听"
+  printf '%s\n' "--------------------------------------------------------------------------------------------------------------"
 
   local no=1
   while IFS=$'\t' read -r slug ip port username password created; do
     [[ -n "${slug:-}" ]] || continue
-    local unit load_state active_state sub_state result main_pid enabled_state status_text
+    local unit load_state active_state sub_state result main_pid enabled_state listen_state status_text
     unit="$(service_name "$slug")"
     read -r load_state active_state sub_state result main_pid enabled_state <<<"$(node_service_state "$unit")"
 
-    case "$active_state" in
-      active)
+    if port_is_listening "$port"; then
+      listen_state="是"
+    else
+      listen_state="否"
+    fi
+
+    case "$active_state:$listen_state" in
+      active:是)
         status_text="运行中"
         ;;
-      failed)
+      active:否)
+        status_text="运行异常"
+        ;;
+      failed:*)
         status_text="失败"
         ;;
-      activating)
+      activating:*)
         status_text="启动中"
         ;;
-      inactive)
+      inactive:*)
         status_text="未运行"
         ;;
       *)
@@ -503,21 +528,23 @@ print_node_table() {
         ;;
     esac
 
-    printf '%-4s %-26s %-16s %-8s %-18s %-12s %-10s\n' \
+    printf '%-4s %-26s %-16s %-8s %-18s %-12s %-10s %-10s\n' \
       "$no" \
       "$slug" \
       "$ip" \
       "$port" \
       "$username" \
       "$status_text" \
-      "$enabled_state"
+      "$enabled_state" \
+      "$listen_state"
 
-    if [[ "$active_state" != "active" ]]; then
-      printf '     详情: load=%s sub=%s result=%s pid=%s\n' \
+    if [[ "$active_state" != "active" || "$listen_state" != "是" ]]; then
+      printf '     详情: load=%s sub=%s result=%s pid=%s listening=%s\n' \
         "$load_state" \
         "$sub_state" \
         "$result" \
-        "$main_pid"
+        "$main_pid" \
+        "$listen_state"
       if [[ "$result" != "success" ]]; then
         journalctl -u "$unit" -n 8 --no-pager 2>/dev/null | sed 's/^/     日志: /' || true
       fi
@@ -553,6 +580,11 @@ username_exists_anywhere() {
 }
 
 port_in_use() {
+  local port="$1"
+  ss -ltnH 2>/dev/null | awk -v port=":$port" '$4 ~ port "$" { found=1 } END { exit found ? 0 : 1 }'
+}
+
+port_is_listening() {
   local port="$1"
   ss -ltnH 2>/dev/null | awk -v port=":$port" '$4 ~ port "$" { found=1 } END { exit found ? 0 : 1 }'
 }
@@ -1447,11 +1479,10 @@ show_install_summary() {
 
 下一步建议：
   1. 使用菜单 2 批量生成节点（全量/网卡/CIDR/文件）。
- 2. 使用菜单 3 查看节点列表，并可直接按 IP 删除不需要的节点。
- 3. 使用菜单 7 导出代理清单，格式为 ip:port:user:pass。
- 4. 批量生成时可以按网卡、CIDR，或者直接导入 IP 文件。
- 5. 如果需要额外独立账号，可在“用户管理”里添加手动账号。
- 6. 后续可以直接输入 `sk5` 打开菜单。
+  2. 使用菜单 3 查看节点列表，并可直接按 IP 删除不需要的节点。
+  3. 使用菜单 6 导出代理清单，格式为 ip:port:user:pass。
+  4. 批量生成时可以按网卡、CIDR，或者直接导入 IP 文件。
+  5. 后续可以直接输入 `sk5` 打开菜单。
 
 配置目录：
   $BASE_DIR
@@ -1472,13 +1503,12 @@ main_menu() {
     printf '%s\n' "1) 安装 / 升级 3proxy"
     printf '%s\n' "2) 批量生成节点（全量/网卡/CIDR/文件）"
     printf '%s\n' "3) 查看节点列表 / 按 IP 删除"
-    printf '%s\n' "4) 用户管理（独立账号）"
-    printf '%s\n' "5) 重启全部节点"
-    printf '%s\n' "6) 查看节点状态"
-    printf '%s\n' "7) 导出代理清单"
-    printf '%s\n' "8) 查看节点日志"
-    printf '%s\n' "9) 卸载本工具创建的所有内容"
-    printf '%s\n' "10) 从 IP 文件导入并批量生成节点"
+    printf '%s\n' "4) 重启全部节点"
+    printf '%s\n' "5) 查看节点状态"
+    printf '%s\n' "6) 导出代理清单"
+    printf '%s\n' "7) 查看节点日志"
+    printf '%s\n' "8) 卸载本工具创建的所有内容"
+    printf '%s\n' "9) 从 IP 文件导入并批量生成节点"
     printf '%s\n' "0) 退出"
     printf '%s\n' "========================================"
     if ! read -r -p "请选择：" choice; then
@@ -1497,13 +1527,17 @@ main_menu() {
         install_dependencies
         ensure_service_user
         ensure_dirs
+        install_self_copy
         write_systemd_template
         install_sk5_launcher
         if has_cmd nft; then
           ensure_nft_firewall_helper || true
         fi
         build_3proxy
+        sync_existing_node_configs
+        restart_all_nodes
         show_install_summary
+        pause
         ;;
       2)
         batch_create_nodes
@@ -1514,29 +1548,26 @@ main_menu() {
         pause
         ;;
       4)
-        user_menu
-        ;;
-      5)
         restart_all_nodes
         pause
         ;;
-      6)
+      5)
         show_status
         pause
         ;;
-      7)
+      6)
         export_proxy_list
         pause
         ;;
-      8)
+      7)
         show_logs
         pause
         ;;
-      9)
+      8)
         uninstall_all
         pause
         ;;
-      10)
+      9)
         batch_create_nodes_from_file
         pause
         ;;
