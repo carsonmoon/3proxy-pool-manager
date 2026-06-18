@@ -140,13 +140,8 @@ ensure_dirs() {
 }
 
 install_sk5_launcher() {
-  cat >/usr/local/bin/sk5 <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec bash "$INSTALLED_SCRIPT_PATH" "\$@"
-EOF
-  chmod 0755 /usr/local/bin/sk5
-  chmod 0755 "$INSTALLED_SCRIPT_PATH" || true
+  install -m 0755 "$INSTALLED_SCRIPT_PATH" /usr/local/bin/sk5
+  install -m 0755 "$INSTALLED_SCRIPT_PATH" /usr/bin/sk5 || true
 
   cat >/etc/profile.d/3proxy-sk5.sh <<'EOF'
 sk5() {
@@ -1517,6 +1512,7 @@ uninstall_all() {
   rm -f "$SYSTEMD_TEMPLATE"
   rm -f "$FIREWALL_NFT_SERVICE" "$FIREWALL_NFT_HELPER"
   rm -f /usr/local/bin/sk5
+  rm -f /usr/bin/sk5
   rm -f /etc/profile.d/3proxy-sk5.sh
   rm -f "$INDEX_FILE" "$USERS_FILE" "$USERS_MANUAL_FILE"
   rm -f /usr/local/bin/3proxy /usr/local/bin/3proxy_* /usr/local/bin/3proxy-firewall-sync
@@ -1569,9 +1565,8 @@ main_menu() {
     printf '%s\n' "4) 重启全部节点"
     printf '%s\n' "5) 查看节点状态"
     printf '%s\n' "6) 导出代理清单"
-    printf '%s\n' "7) 查看节点日志"
-    printf '%s\n' "8) 卸载本工具创建的所有内容"
-    printf '%s\n' "9) 从 IP 文件导入并批量生成节点"
+    printf '%s\n' "7) 卸载本工具创建的所有内容"
+    printf '%s\n' "8) 从 IP 文件导入并批量生成节点"
     printf '%s\n' "0) 退出"
     printf '%s\n' "========================================"
     if ! read -r -p "请选择：" choice; then
@@ -1623,14 +1618,10 @@ main_menu() {
         pause
         ;;
       7)
-        show_logs
-        pause
-        ;;
-      8)
         uninstall_all
         pause
         ;;
-      9)
+      8)
         batch_create_nodes_from_file
         pause
         ;;
