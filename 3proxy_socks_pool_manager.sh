@@ -532,6 +532,9 @@ prompt_credentials_mode() {
   printf '\n====== 账号模式选择 ======\n'
   printf '1) 所有节点使用同一组账号密码\n'
   printf '2) 每个节点随机账号密码\n'
+  printf '说明：\n'
+  printf '  - 选 1 时，所有节点共享同一套用户名和密码。\n'
+  printf '  - 选 2 时，每个节点都会生成单独账号。\n'
   printf '\n'
   read -r -p "请选择账号模式：" mode
   mode="${mode:-1}"
@@ -573,6 +576,9 @@ prompt_port_mode() {
   printf '\n====== 端口模式选择 ======\n'
   printf '1) 所有 IP 使用同一个端口（推荐站群场景）\n'
   printf '2) 从起始端口开始递增\n'
+  printf '说明：\n'
+  printf '  - 选 1 时，每个 IP 都监听同一个端口。\n'
+  printf '  - 选 2 时，从起始端口开始依次递增。\n'
   printf '\n'
   read -r -p "请选择端口模式：" mode
   mode="${mode:-1}"
@@ -1038,6 +1044,9 @@ export_proxy_list() {
   printf '\n====== 导出格式选择 ======\n'
   printf '1) ip:port:user:pass\n'
   printf '2) socks5://user:pass@ip:port\n'
+  printf '说明：\n'
+  printf '  - 选 1 时导出原始清单。\n'
+  printf '  - 选 2 时导出标准 SOCKS5 URI。\n'
   printf '\n'
   local export_mode
   read -r -p "请选择导出格式：" export_mode
@@ -1074,6 +1083,9 @@ check_proxy_health() {
   printf '\n====== 健康检查 ======\n'
   printf '1) 仅检查端口监听\n'
   printf '2) 检查端口监听 + SOCKS 出口连通性\n'
+  printf '说明：\n'
+  printf '  - 选 1 时只看本机监听状态。\n'
+  printf '  - 选 2 时会额外检查代理出口 IP。\n'
   printf '\n'
 
   local health_mode
