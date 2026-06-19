@@ -61,6 +61,11 @@
 ```
 bash <(curl -fsSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/main/3proxy_socks_manager.sh)
 ```
+
+```
+curl -fsSL https://raw.githubusercontent.com/carsonmoon/3proxy-pool-manager/refs/heads/main/3proxy_socks_pool_manager.sh -o /tmp/3proxy_socks_pool_manager.sh && chmod +x /tmp/3proxy_socks_pool_manager.sh && sudo /tmp/3proxy_socks_pool_manager.sh
+```
+
 执行完以后，直接输入：
 sk5
 就能再打开菜单。
