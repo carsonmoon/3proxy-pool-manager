@@ -1004,7 +1004,6 @@ list_nodes() {
 
 show_status() {
   require_root
-  printf '\n====== 状态查看 ======\n'
   systemctl status "$MAIN_UNIT" --no-pager -l 2>/dev/null || true
 }
 
