@@ -1005,9 +1005,9 @@ list_nodes() {
 show_status() {
   require_root
   if has_cmd script; then
-    script -qec "systemctl status '$MAIN_UNIT' --no-pager -l" /dev/null 2>/dev/null || true
+    script -qec "env TERM=xterm-256color SYSTEMD_COLORS=1 systemctl status '$MAIN_UNIT' --no-pager -l" /dev/null 2>/dev/null || true
   else
-    systemctl status "$MAIN_UNIT" --no-pager -l 2>/dev/null || true
+    TERM=xterm-256color SYSTEMD_COLORS=1 systemctl status "$MAIN_UNIT" --no-pager -l 2>/dev/null || true
   fi
 }
 
