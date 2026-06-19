@@ -516,13 +516,19 @@ preview_ips() {
 
 prompt_credentials_mode() {
   local mode username password
-  printf '\n1) 所有节点使用同一组账号密码\n'
+  printf '\n====== 账号模式选择 ======\n'
+  printf '1) 所有节点使用同一组账号密码\n'
   printf '2) 每个节点随机账号密码\n'
+  printf '说明：\n'
+  printf '  - 选 1 时，所有节点共享同一套用户名和密码，方便统一管理。\n'
+  printf '  - 选 2 时，每个节点都会生成单独账号，适合更细粒度区分。\n'
+  printf '\n'
   read -r -p "请选择账号模式 [1]：" mode
   mode="${mode:-1}"
 
   case "$mode" in
     1)
+      printf '\n'
       read -r -p "请输入统一用户名（留空自动生成）：" username
       if [[ -z "$username" ]]; then
         username="$(random_unique_username)"
@@ -539,9 +545,11 @@ prompt_credentials_mode() {
         log "已自动生成统一密码：$password"
       fi
       [[ "$password" != *:* && "$password" != *[[:space:]]* ]] || die "密码中不能包含冒号或空白字符。"
+      printf '[信息] 账号模式：所有节点共用同一组账号密码\n' >&2
       printf 'shared\t%s\t%s\n' "$username" "$password"
       ;;
     2)
+      printf '[信息] 账号模式：每个节点单独生成随机账号密码\n' >&2
       printf 'random\t\t\n'
       ;;
     *)
@@ -552,24 +560,33 @@ prompt_credentials_mode() {
 
 prompt_port_mode() {
   local mode port
-  printf '\n1) 所有 IP 使用同一个端口（推荐站群场景）\n'
+  printf '\n====== 端口模式选择 ======\n'
+  printf '1) 所有 IP 使用同一个端口（推荐站群场景）\n'
   printf '2) 从起始端口开始递增\n'
+  printf '说明：\n'
+  printf '  - 选 1 时，每个 IP 都监听同一个端口，例如全部都是 5001。\n'
+  printf '  - 选 2 时，从起始端口开始依次递增，例如 5001、5002、5003。\n'
+  printf '\n'
   read -r -p "请选择端口模式 [1]：" mode
   mode="${mode:-1}"
 
   case "$mode" in
     1)
+      printf '\n'
       read -r -p "请输入监听端口 [20000]：" port
       port="${port:-20000}"
       [[ "$port" =~ ^[0-9]+$ ]] || die "端口必须是数字。"
       ((port >= 1 && port <= 65535)) || die "端口超出范围。"
+      printf '[信息] 端口模式：所有 IP 共用同一个端口 %s\n' "$port" >&2
       printf 'same\t%s\n' "$port"
       ;;
     2)
+      printf '\n'
       read -r -p "请输入起始端口 [20000]：" port
       port="${port:-20000}"
       [[ "$port" =~ ^[0-9]+$ ]] || die "起始端口必须是数字。"
       ((port >= 1 && port <= 65535)) || die "起始端口超出范围。"
+      printf '[信息] 端口模式：从 %s 开始递增分配端口\n' "$port" >&2
       printf 'increment\t%s\n' "$port"
       ;;
     *)
@@ -692,7 +709,9 @@ create_nodes_from_ips() {
   local -a ips=("$@")
   ((${#ips[@]} > 0)) || die "没有找到符合条件的 IP。"
 
+  printf '\n====== 批量生成向导 ======\n'
   preview_ips "${ips[@]}"
+  printf '\n'
   read -r -p "是否继续生成这些节点？[Y/n]：" confirm
   if [[ "${confirm:-Y}" =~ ^[Nn]$ ]]; then
     die "已取消。"
@@ -708,6 +727,20 @@ create_nodes_from_ips() {
   cred_mode="${cred_pair%%$'\t'*}"
   shared_user="$(printf '%s' "$cred_pair" | awk -F'\t' '{ print $2 }')"
   shared_pass="$(printf '%s' "$cred_pair" | awk -F'\t' '{ print $3 }')"
+
+  printf '\n[信息] 开始生成节点：%d 个 IP\n' "${#ips[@]}"
+  if [[ "$port_mode" == "same" ]]; then
+    printf '[信息] 端口策略：所有 IP 使用同一个端口 %s\n' "$base_port"
+  else
+    printf '[信息] 端口策略：从 %s 开始递增\n' "$base_port"
+  fi
+  if [[ "$cred_mode" == "shared" ]]; then
+    printf '[信息] 账号策略：所有节点共享同一组账号密码\n'
+  else
+    printf '[信息] 账号策略：每个节点单独随机账号密码\n'
+  fi
+  printf '[信息] 即将开始写入节点与主配置\n'
+  printf '\n'
 
   local success=0 failed=0 idx ip port username password slug
   local -a added_slugs=()
@@ -786,19 +819,23 @@ batch_create_nodes() {
   require_root
   require_3proxy_installed
 
-  printf '\n%s\n' "====== 批量生成来源选择 ======"
-  printf '%s\n' "1) 自动发现本机全部 IPv4"
-  printf '%s\n' "2) 按网卡名称筛选"
-  printf '%s\n' "3) 按 CIDR/IP 段筛选"
-  printf '%s\n' "4) 从 IP 文件导入"
+  printf '\n====== 批量生成向导 ======\n'
+  printf '这一步先决定节点来源，后面再决定端口和账号策略。\n'
+  printf '\n'
+  printf '1) 自动发现本机全部 IPv4\n'
+  printf '2) 按网卡名称筛选\n'
+  printf '3) 按 CIDR/IP 段筛选\n'
+  printf '4) 从 IP 文件导入\n'
   read -r -p "请选择来源：" source_mode
 
   local -a ips=()
   case "$source_mode" in
     1)
+      printf '[信息] 已选择：自动发现本机全部 IPv4\n'
       mapfile -t ips < <(discover_local_ipv4s)
       ;;
     2)
+      printf '[信息] 已选择：按网卡名称筛选\n'
       read -r -p "请输入网卡名称，多个用英文逗号分隔（留空表示全部）：" ifaces
       if [[ -z "${ifaces// /}" ]]; then
         mapfile -t ips < <(discover_local_ipv4s)
@@ -807,10 +844,12 @@ batch_create_nodes() {
       fi
       ;;
     3)
+      printf '[信息] 已选择：按 CIDR/IP 段筛选\n'
       read -r -p "请输入 CIDR / IP 段，多个用英文逗号分隔（留空表示全部）：" cidrs
       mapfile -t ips < <(filter_ips_by_cidrs "$cidrs")
       ;;
     4)
+      printf '[信息] 已选择：从 IP 文件导入\n'
       read -r -p "请输入 IP 文件路径：" ip_file
       mapfile -t ips < <(import_ipv4s_from_file "$ip_file")
       ;;
@@ -877,14 +916,17 @@ delete_nodes_by_ip() {
     return 0
   fi
 
-  printf '\n将删除以下节点：\n'
+  printf '\n====== 删除确认 ======\n'
+  printf '本次准备删除的 IP：%s\n' "$target_ip"
+  printf '匹配到 %d 个节点：\n' "${#matches[@]}"
   local item
   for item in "${matches[@]}"; do
     IFS='|' read -r slug ip port username created <<<"$item"
     printf '  %s  [%s:%s]  用户:%s  创建:%s\n' "$slug" "$ip" "$port" "$username" "$created"
   done
 
-  read -r -p "确认删除上述 IP 相关节点吗？[y/N]：" answer
+  printf '\n'
+  read -r -p "确认删除这些节点吗？输入 y 继续，其他键取消：" answer
   [[ "${answer:-N}" =~ ^[Yy]$ ]] || die "已取消。"
 
   for item in "${matches[@]}"; do
@@ -900,10 +942,12 @@ delete_nodes_by_ip() {
 }
 
 list_nodes() {
+  printf '\n====== 节点列表 ======\n'
   print_node_table || return 0
 
   printf '\n'
-  read -r -p "输入要删除的 IP（留空返回）：" delete_ip
+  printf '说明：你可以输入一个 IP 来删除它对应的所有节点；直接回车则返回主菜单。\n'
+  read -r -p "请输入要删除的 IP：" delete_ip
   delete_ip="${delete_ip// /}"
   [[ -z "$delete_ip" ]] && return 0
   delete_nodes_by_ip "$delete_ip"
@@ -926,6 +970,7 @@ show_runtime_overview() {
 
 show_status() {
   require_root
+  printf '\n====== 状态总览 ======\n'
   show_runtime_overview
   printf '\n'
   print_node_table || return 0
@@ -937,6 +982,7 @@ show_logs() {
   records="$(list_node_records)"
   [[ -n "$records" ]] || die "当前没有节点。"
 
+  printf '\n====== 日志查看 ======\n'
   printf '\n====== 主服务最近日志 ======\n'
   journalctl -u "$MAIN_UNIT" -n 60 --no-pager 2>/dev/null || true
 
