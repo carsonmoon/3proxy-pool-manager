@@ -1006,14 +1006,133 @@ export_proxy_list() {
   records="$(list_node_records)"
   [[ -n "$records" ]] || die "当前没有可导出的代理。"
 
+  printf '\n====== 导出格式选择 ======\n'
+  printf '1) ip:port:user:pass\n'
+  printf '2) socks5://user:pass@ip:port\n'
+  printf '说明：\n'
+  printf '  - 第 1 种适合脚本、面板和原始清单。\n'
+  printf '  - 第 2 种适合直接粘贴到支持标准 SOCKS5 URI 的工具。\n'
+  printf '\n'
+  local export_mode
+  read -r -p "请选择导出格式 [1]：" export_mode
+  export_mode="${export_mode:-1}"
+
   read -r -p "请输入导出路径 [ /root/3proxy_proxy_list.txt ]：" out_path
   out_path="${out_path:-/root/3proxy_proxy_list.txt}"
   out_path="$(expand_path "$out_path")"
 
   mkdir -p "$(dirname "$out_path")"
-  printf '%s\n' "$records" | awk -F'\t' 'NF >= 5 { printf "%s:%s:%s:%s\n", $2, $3, $4, $5 }' >"$out_path"
+
+  case "$export_mode" in
+    1)
+      printf '%s\n' "$records" | awk -F'\t' 'NF >= 5 { printf "%s:%s:%s:%s\n", $2, $3, $4, $5 }' >"$out_path"
+      ;;
+    2)
+      printf '%s\n' "$records" | awk -F'\t' 'NF >= 5 { printf "socks5://%s:%s@%s:%s\n", $4, $5, $2, $3 }' >"$out_path"
+      ;;
+    *)
+      die "导出格式选择无效。"
+      ;;
+  esac
+
   chmod 0600 "$out_path" || true
   log "代理清单已导出：$out_path"
+}
+
+check_proxy_health() {
+  require_root
+  local records
+  records="$(list_node_records)"
+  [[ -n "$records" ]] || die "当前没有节点。"
+
+  printf '\n====== 健康检查 ======\n'
+  printf '1) 仅检查端口监听\n'
+  printf '2) 检查端口监听 + SOCKS 出口连通性\n'
+  printf '说明：\n'
+  printf '  - 选 1 时不会访问外网，适合排查本机监听问题。\n'
+  printf '  - 选 2 时会通过代理访问外网，确认出口 IP 是否正确。\n'
+  printf '\n'
+
+  local health_mode
+  read -r -p "请选择检查模式 [1]：" health_mode
+  health_mode="${health_mode:-1}"
+  case "$health_mode" in
+    1)
+      printf '[信息] 检查模式：仅检查端口监听\n'
+      ;;
+    2)
+      printf '[信息] 检查模式：端口监听 + SOCKS 出口连通性\n'
+      ;;
+    *)
+      die "健康检查模式无效。"
+      ;;
+  esac
+
+  printf '\n'
+
+  local total=0 listening_ok=0 proxy_ok=0 proxy_fail=0
+  local slug ip port username password created listen_state exit_state exit_ip
+  local listen_text proxy_text
+
+  if main_service_active; then
+    printf '[总览] 主服务：运行中\n'
+  else
+    printf '[总览] 主服务：未运行或异常\n'
+  fi
+
+  while IFS=$'\t' read -r slug ip port username password created; do
+    [[ -n "${slug:-}" ]] || continue
+    total=$((total + 1))
+    if port_is_listening_on_ip "$ip" "$port"; then
+      listen_state="正常"
+      listening_ok=$((listening_ok + 1))
+    else
+      listen_state="异常"
+    fi
+
+    exit_state="未检查"
+    exit_ip=""
+    if [[ "$listen_state" == "正常" && "$health_mode" == "2" ]]; then
+      if exit_ip="$(timeout 20 curl -fsS --proxy "socks5h://${username}:${password}@${ip}:${port}" https://api.ipify.org 2>/dev/null)"; then
+        exit_ip="${exit_ip//$'\r'/}"
+        if [[ -n "$exit_ip" && "$exit_ip" == "$ip" ]]; then
+          exit_state="正常"
+          proxy_ok=$((proxy_ok + 1))
+        elif [[ -n "$exit_ip" ]]; then
+          exit_state="不一致:${exit_ip}"
+          proxy_fail=$((proxy_fail + 1))
+        else
+          exit_state="空结果"
+          proxy_fail=$((proxy_fail + 1))
+        fi
+      else
+        exit_state="连接失败"
+        proxy_fail=$((proxy_fail + 1))
+      fi
+    fi
+
+    if [[ "$listen_state" == "正常" ]]; then
+      listen_text="已监听"
+    else
+      listen_text="未监听"
+    fi
+
+    if [[ "$health_mode" == "2" ]]; then
+      proxy_text="$exit_state"
+    else
+      proxy_text="未检查"
+    fi
+
+    printf '%s %s:%s 监听=%s 出口=%s\n' "$slug" "$ip" "$port" "$listen_text" "$proxy_text"
+  done <<<"$records"
+
+  printf '\n'
+  printf '[汇总] 节点总数：%d\n' "$total"
+  printf '[汇总] 端口监听正常：%d\n' "$listening_ok"
+  if [[ "$health_mode" == "2" ]]; then
+    printf '[汇总] SOCKS 出口正常：%d\n' "$proxy_ok"
+    printf '[汇总] SOCKS 出口异常：%d\n' "$proxy_fail"
+  fi
 }
 
 install_or_upgrade() {
@@ -1097,7 +1216,7 @@ main_menu() {
     printf '%s\n' "4) 重启主 3proxy 服务" >&2
     printf '%s\n' "5) 查看状态（主服务 + 端口监听）" >&2
     printf '%s\n' "6) 导出代理清单" >&2
-    printf '%s\n' "7) 查看日志" >&2
+    printf '%s\n' "7) 健康检查" >&2
     printf '%s\n' "8) 卸载本工具创建的所有内容" >&2
     printf '%s\n' "0) 退出" >&2
     printf '%s\n' "========================================" >&2
@@ -1136,7 +1255,7 @@ main_menu() {
         pause
         ;;
       7)
-        show_logs
+        check_proxy_health
         pause
         ;;
       8)
