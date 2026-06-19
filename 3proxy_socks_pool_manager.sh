@@ -536,7 +536,7 @@ prompt_credentials_mode() {
   printf '  - 选 1 时，所有节点共享同一套用户名和密码，方便统一管理。\n'
   printf '  - 选 2 时，每个节点都会生成单独账号，适合更细粒度区分。\n'
   printf '\n'
-  read -r -p "请选择账号模式：1=共用同一组账号密码，2=每个节点随机账号密码 [1]：" mode
+  read -r -p "请选择账号模式：" mode
   mode="${mode:-1}"
 
   case "$mode" in
@@ -580,7 +580,7 @@ prompt_port_mode() {
   printf '  - 选 1 时，每个 IP 都监听同一个端口，例如全部都是 5001。\n'
   printf '  - 选 2 时，从起始端口开始依次递增，例如 5001、5002、5003。\n'
   printf '\n'
-  read -r -p "请选择端口模式：1=所有IP共用同一端口，2=从起始端口递增 [1]：" mode
+  read -r -p "请选择端口模式：" mode
   mode="${mode:-1}"
 
   case "$mode" in
@@ -1049,7 +1049,7 @@ export_proxy_list() {
   printf '  - 第 2 种适合直接粘贴到支持标准 SOCKS5 URI 的工具。\n'
   printf '\n'
   local export_mode
-  read -r -p "请选择导出格式 [1]：" export_mode
+  read -r -p "请选择导出格式：" export_mode
   export_mode="${export_mode:-1}"
 
   read -r -p "请输入导出路径 [ /root/3proxy_proxy_list.txt ]：" out_path
@@ -1089,7 +1089,7 @@ check_proxy_health() {
   printf '\n'
 
   local health_mode
-  read -r -p "请选择检查模式 [1]：" health_mode
+  read -r -p "请选择检查模式：" health_mode
   health_mode="${health_mode:-1}"
   case "$health_mode" in
     1)
