@@ -523,7 +523,7 @@ prompt_credentials_mode() {
   printf '  - 选 1 时，所有节点共享同一套用户名和密码，方便统一管理。\n'
   printf '  - 选 2 时，每个节点都会生成单独账号，适合更细粒度区分。\n'
   printf '\n'
-  read -r -p "请选择账号模式 [1]：" mode
+  read -r -p "请选择账号模式：1=共用同一组账号密码，2=每个节点随机账号密码 [1]：" mode
   mode="${mode:-1}"
 
   case "$mode" in
@@ -567,7 +567,7 @@ prompt_port_mode() {
   printf '  - 选 1 时，每个 IP 都监听同一个端口，例如全部都是 5001。\n'
   printf '  - 选 2 时，从起始端口开始依次递增，例如 5001、5002、5003。\n'
   printf '\n'
-  read -r -p "请选择端口模式 [1]：" mode
+  read -r -p "请选择端口模式：1=所有IP共用同一端口，2=从起始端口递增 [1]：" mode
   mode="${mode:-1}"
 
   case "$mode" in
