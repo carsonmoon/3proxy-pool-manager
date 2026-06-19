@@ -712,7 +712,7 @@ create_nodes_from_ips() {
   printf '\n====== 批量生成向导 ======\n'
   preview_ips "${ips[@]}"
   printf '\n'
-  read -r -p "是否继续生成这些节点？[Y/n]：" confirm
+  read -r -p "是否继续生成这些节点？[Y/N]：" confirm
   if [[ "${confirm:-Y}" =~ ^[Nn]$ ]]; then
     die "已取消。"
   fi
@@ -1207,7 +1207,7 @@ uninstall_all() {
   require_root
   detect_os
 
-  read -r -p "确定要卸载本工具创建的配置、服务、二进制和日志吗？[y/N]：" answer
+  read -r -p "确定要卸载本工具创建的配置、服务、二进制和日志吗？[Y/N]：" answer
   [[ "${answer:-N}" =~ ^[Yy]$ ]] || die "已取消。"
 
   systemctl disable --now "$MAIN_UNIT" >/dev/null 2>&1 || true
