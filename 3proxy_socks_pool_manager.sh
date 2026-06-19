@@ -941,37 +941,63 @@ delete_nodes_by_ip() {
   log "已删除 IP 为 $target_ip 的 ${#matches[@]} 个节点。"
 }
 
+delete_node_by_index() {
+  require_root
+  local target_index="$1"
+  [[ "$target_index" =~ ^[0-9]+$ ]] || die "序号必须是数字。"
+
+  local record
+  record="$(node_record_by_index "$target_index")"
+  [[ -n "$record" ]] || die "没有找到序号为 $target_index 的节点。"
+
+  local slug ip port username password created
+  IFS=$'\t' read -r slug ip port username password created <<<"$record"
+
+  printf '\n====== 删除确认 ======\n'
+  printf '序号：%s\n' "$target_index"
+  printf '节点：%s\n' "$slug"
+  printf '地址：%s:%s\n' "$ip" "$port"
+  printf '用户名：%s\n' "$username"
+  printf '创建时间：%s\n' "$created"
+  printf '\n'
+  read -r -p "确认删除这个节点吗？输入 y 继续，其他键取消：" answer
+  [[ "${answer:-N}" =~ ^[Yy]$ ]] || die "已取消。"
+
+  remove_node_record "$slug"
+
+  if [[ "$(firewall_backend)" == "nft" ]]; then
+    sync_nft_firewall_rules || true
+  fi
+  restart_main_service
+  log "已删除序号为 $target_index 的节点。"
+}
+
 list_nodes() {
   printf '\n====== 节点列表 ======\n'
   print_node_table || return 0
 
   printf '\n'
-  printf '说明：你可以输入一个 IP 来删除它对应的所有节点；直接回车则返回主菜单。\n'
-  read -r -p "请输入要删除的 IP：" delete_ip
-  delete_ip="${delete_ip// /}"
-  [[ -z "$delete_ip" ]] && return 0
-  delete_nodes_by_ip "$delete_ip"
-}
+  printf '说明：你可以输入序号删除单个节点，或输入 IP 删除该 IP 对应的所有节点；直接回车返回主菜单。\n'
+  read -r -p "请输入要删除的序号或 IP：" delete_key
+  delete_key="${delete_key// /}"
+  [[ -z "$delete_key" ]] && return 0
 
-show_runtime_overview() {
-  printf '%s\n' "====== 运行概览 ======"
-  if [[ -x "$BIN_PATH" ]]; then
-    printf '3proxy 二进制: 已安装 (%s)\n' "$BIN_PATH"
+  if [[ "$delete_key" =~ ^[0-9]+$ ]]; then
+    delete_node_by_index "$delete_key"
   else
-    printf '3proxy 二进制: 未安装 (%s)\n' "$BIN_PATH"
+    delete_nodes_by_ip "$delete_key"
   fi
-  printf '主配置: %s\n' "$MAIN_CFG"
-  printf '节点索引: %s\n' "$NODE_INDEX"
-  printf '账号文件: %s\n' "$USERS_FILE"
-  printf '日志目录: %s\n' "$LOG_DIR"
-  printf '\n主服务状态:\n'
-  systemctl status "$MAIN_UNIT" --no-pager -l 2>/dev/null || true
 }
 
 show_status() {
   require_root
-  printf '\n====== 状态总览 ======\n'
-  show_runtime_overview
+  printf '\n====== 状态查看 ======\n'
+  printf '主服务：%s\n' "$MAIN_UNIT"
+  printf '主配置：%s\n' "$MAIN_CFG"
+  printf '节点索引：%s\n' "$NODE_INDEX"
+  printf '账号文件：%s\n' "$USERS_FILE"
+  printf '\n====== systemctl status %s ======\n' "$MAIN_UNIT"
+  systemctl status "$MAIN_UNIT" --no-pager -l 2>/dev/null || true
   printf '\n'
   print_node_table || return 0
 }
