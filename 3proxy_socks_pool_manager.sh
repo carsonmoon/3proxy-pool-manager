@@ -1005,14 +1005,7 @@ list_nodes() {
 show_status() {
   require_root
   printf '\n====== 状态查看 ======\n'
-  printf '主服务：%s\n' "$MAIN_UNIT"
-  printf '主配置：%s\n' "$MAIN_CFG"
-  printf '节点索引：%s\n' "$NODE_INDEX"
-  printf '账号文件：%s\n' "$USERS_FILE"
-  printf '\n====== systemctl status %s ======\n' "$MAIN_UNIT"
   systemctl status "$MAIN_UNIT" --no-pager -l 2>/dev/null || true
-  printf '\n'
-  print_node_table || return 0
 }
 
 show_logs() {
