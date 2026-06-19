@@ -345,6 +345,19 @@ list_node_records() {
   awk -F'\t' 'NF >= 6 { print }' "$NODE_INDEX"
 }
 
+node_record_by_index() {
+  local target_index="$1"
+  list_node_records | awk -F'\t' -v target="$target_index" '
+    NF >= 6 {
+      count++
+      if (count == target) {
+        print
+        exit
+      }
+    }
+  '
+}
+
 node_exists() {
   local ip="$1"
   local port="$2"
